@@ -1,0 +1,84 @@
+# Prompt 1: Used to obtain an example of how to use the library PDFPlumber.
+Give me an example to extract a table from a PDF using PDFPlumber on Python.
+Add a message to show me the output of said table under the assumption there is only 1 table.
+
+# Prompt 2: Used to verify whether it was correct to simply add more fields on a list to obtain the desired information, using a function from the documentation as a base.
+To add more colums to my catalog in my PDF, would the proper way here be such as the following?
+Consider I'm using PDFPlumber.
+fields = resolve(resolve(pdf.doc.catalog["AcroForm", "PowerPoint", "Word"])["Fields"])
+
+# Prompt 3: Used to get an insight as for how to obtain the desired rows and their information when the function extract_tables didn't work. 
+Then considering I am searching for colums of "a. FECHA OPERACIÓN
+b. FECHA LIQUIDACIÓN
+c. COD. DESCRIPCIÓN
+d. REFERENCIA
+e. CARGOS
+f. ABONOS
+g. SALDO OPERACIÓN
+h. SALDO LIQUIDACIÖN" which aren't identified by the function extract_tables, how would I get the values of the cells?
+
+# Prompt 4: Given the was too big and made it difficult to read properly, I requested help to filter it and make it more human readable.
+Considering I want to filter the columns with the following text:
+a. FECHA OPERACIÓN
+b. FECHA LIQUIDACIÓN
+c. COD. DESCRIPCIÓN
+d. REFERENCIA
+e. CARGOS
+f. ABONOS
+g. SALDO OPERACIÓN
+h. SALDO LIQUIDACIÖN
+
+How would I apply the filter to my function?
+import pdfplumber
+from pdfplumber.utils.pdfinternals import resolve_and_decode, resolve
+
+pdf = pdfplumber.open("./ESTADO DE CUENTA.pdf")
+
+with pdfplumber.open("./ESTADO DE CUENTA.pdf") as pdf:
+
+    for page in pdf.pages:
+        tables = page.extract_words(x_tolerance=1, x_tolerance_ratio=None, y_tolerance=1, keep_blank_chars=False, use_text_flow=False, line_dir="ttb", char_dir="ltr", line_dir_rotated="ttb", char_dir_rotated="ltr", extra_attrs=[], split_at_punctuation=False, expand_ligatures=True, return_chars=False)
+        if tables:
+            for row in tables:
+                print(row)
+            break
+
+Note: Keep in mind I want to access to the contents of the cells of each row below the coordinates of each of the fields I want.
+
+# Prompt 5: When running the code with the addition printing the contents of the cell, an error appeared which I wanted more insight of to identify what caused it.
+Explain me what this error specifically means.
+
+File "/home/tophat/Documents/TEC/Miscellanious/interview.py", line 53, in <module>
+    "fecha_operacion": headers["FECHA"]["x0"],
+                       ~~~~~~~~~~~~~~~~^^^^^^
+TypeError: 'NoneType' object is not subscriptable
+
+# Prompt 6: Given the code was becoming too big and I was trying to get to the final goal right away with issues, I focused to divide it in smaller tasks, this time being limited to the contents of page 1.
+Right now minimize the scope such that it only prints the values/text of the cells within the rows of the headers I declared.
+
+import pdfplumber
+from pdfplumber.utils.pdfinternals import resolve_and_decode, resolve
+
+from collections import defaultdict
+
+pdf = pdfplumber.open("./ESTADO DE CUENTA.pdf")
+
+headers = {
+    "OPER": None,
+    "LIQ": None,
+    "COD.": None,
+    "DESCRIPCION": None,
+    "REFERENCIA": None,
+    "CARGOS": None,
+    "ABONOS": None,
+    "OPERACION": None,
+    "LIQUIDACION": None
+}
+
+#for page in pdf.pages:
+words = pdf.pages[0].extract_words(
+    x_tolerance=1,
+    y_tolerance=1,
+    keep_blank_chars=False
+)
+

@@ -39,6 +39,6 @@ python interview.py
 - The coordinates for REFERENCIA are tricky since the content is usually below the coordinates of DESCRIPCION. However, it always starts with "Ref.".
 - The coordinates for OPER are tricky since the content doesn't start at the same x0 as the header.
 - Multiple pages through the whole PDF are analyzed to gather all the data we want.
-- Pages 2 and 3 are missing the header REFERENCIA, so header coordinates aren't required.
+- Pages 2 and 3 are missing the header REFERENCIA, so header coordinates aren't required to get this row specifically.
 - The function .extract_words() is the one used to get coordinates to gather the data.
 - Coordinates aren't an absolute response to gather all the wanted data (such with REFERENCIA and OPER).

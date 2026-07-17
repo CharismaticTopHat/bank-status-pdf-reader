@@ -82,3 +82,91 @@ words = pdf.pages[0].extract_words(
     keep_blank_chars=False
 )
 
+# Prompt 7: Starting the problem from the base in order to consider most relevant considerations before implementing a solution.
+Considerations:
+-We're analyzing a PDF with Bank Statement.
+-We want to collect the data  from the rows OPER, LIQ, COD., DESCRIPCION, REFERENCIA, CARGOS, BONOS, OPERACION, LIQUIDACION.
+-The library PDFPlumber is being used.
+-Table_Extract doesn't identify the data we want.
+-Each line ALWAYS has OPER, LIQ, COD. and DESCRIPCION, but the remaining rows can be empty.
+-REFERENCIA can be empty or cases such as Ref. 2836445063 or Ref. IVA COM SERV BC (with varying length), along with the fact on the row it may be below the field "DESCRIPCION" rather than "REFERENCIA", however it always start with "Ref.".
+-Multiple pages through the whole PDF are analyzed to gather all the data we want.
+-Python is the language code being used.
+-To identify the coordinates for each Row header and the contents I want, I used a snippet of code which is attached:
+with pdfplumber.open(PDF_FILE) as pdf:
+
+    page = pdf.pages[0]
+
+    words = page.extract_words(
+        x_tolerance=1,
+        y_tolerance=1,
+        keep_blank_chars=False,
+        use_text_flow=False
+    )
+
+    ###########################################################
+    # Find headers
+    ###########################################################
+
+    for word in words:
+
+        text = word["text"].upper()
+
+        if text in headers and headers[text] is None:
+            headers[text] = word
+
+    ###########################################################
+    # Build column ranges
+    ###########################################################
+
+    found = {
+        k: v["x0"]
+        for k, v in headers.items()
+        if v is not None
+    }
+
+    found = sorted(found.items(), key=lambda x: x[1])
+
+    column_ranges = []
+
+    for i, (name, left) in enumerate(found):
+
+        if i == len(found) - 1:
+            right = float("inf")
+        else:
+            right = found[i + 1][1]
+
+        column_ranges.append((name, left, right))
+
+    ###########################################################
+    # Header / footer limits
+    ###########################################################
+
+    header_bottom = max(
+        h["bottom"]
+        for h in headers.values()
+        if h is not None
+    )
+
+    footer_top = float("inf")
+
+    for word in words:
+        if word["text"] == "Estimado":
+            footer_top = word["top"]
+            break
+
+The issue is not the CSV generat
+
+With all the previous considerations, what would be the resulting code to collect the wanted data from the specified fields and save it to a .csv with tabular format and headers?
+
+# Prompt 8: Requesting changes to the code to solve identified issues generated from the previous prompt, where the row OPER was missing and moved data to different rows, along with joining data from different rows.
+I have attached the PDF where I'm extracting the message to this message.
+
+However, there're a couple issues on the CSV the code it previously generated:
+-The totality of OPER is missing (it's getting its values from LIQ).
+-It moved every COD. from the 4th to the last one to the row LIQ.
+-From the 1st to the 3rd  COD., it also added text that should have been in DESCRIPCION (i.e. COD. 1 is C19 INTERESES, when it should have been C19 exclusively).
+-The "INTERESES" in COD. should have gone in DESCRIPCION along with GANADOS.
+-REFERENCIA 1 REFERENCIA 2 (first row and second row) got content such as 1,190.00 Ref. 2836445063 and 1,375.58 Ref. 2836445063, when both instances before "Ref." should have gone into CARGOS.
+
+What modifications would the code undergo through in order to fix these issues?

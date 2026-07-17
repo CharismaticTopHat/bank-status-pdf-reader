@@ -17,8 +17,10 @@ RANGE_HEADERS = ["OPER", "LIQ", "COD.", "DESCRIPCION", "REFERENCIA", "CARGOS", "
 # Always present on each cell
 ANCHOR_HEADERS = {"OPER", "LIQ", "COD.", "DESCRIPCION"}
 
+# Regular expressions to gather OPER and REFERENCIA contents from text, rather than coordinates
 REF_PATTERN = re.compile(r"^ref\.?$", re.IGNORECASE)
 DATE_PATTERN = re.compile(r"^\d{2}/[A-Z]{3}$", re.IGNORECASE)
+
 ROW_Y_TOLERANCE = 3
 HEADER_ROW_TOLERANCE = 2
 FOOTER_MARKERS = {"Estimado", "Total", "INSTITUCION"}
@@ -66,7 +68,8 @@ def find_header_row(words):
 
 def build_column_ranges(headers):
     """
-    Identify midpoint for the data which doesn't necessarily start at the same x-position as its header label."""
+    Identify midpoint for the data which doesn't necessarily start at the same x-position as its header label.
+    """
     found = sorted(
         ((k, v["x0"]) for k, v in headers.items() if v is not None),
         key=lambda item: item[1],

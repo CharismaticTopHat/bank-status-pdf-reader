@@ -1,80 +1,91 @@
-"""
-Extract transaction rows from a bank-statement PDF using pdfplumber,
-based on word-position (x0) column mapping rather than page.extract_table().
-
-Columns collected:
-OPER | LIQ | COD. | DESCRIPCION | REFERENCIA | CARGOS | BONOS | OPERACION | LIQUIDACION
-
-Special handling:
-- REFERENCIA always starts with a token "Ref." (case-insensitive), even when
-  it visually falls under the DESCRIPCION column. That token, and everything
-  after it up to the start of the CARGOS column, is forced into REFERENCIA.
-- Continuation lines (OPER/LIQ/COD. empty, just a wrapped "Ref. ..." line)
-  are merged into the previous transaction row instead of creating a new one.
-"""
-
 import re
 import csv
 import pdfplumber
+from collections import defaultdict
 
-# ------------------------------------------------------------------ #
-# Configuration
-# ------------------------------------------------------------------ #
-PDF_FILE = "./ESTADO DE CUENTA.pdf"      # <-- update with your PDF path
+PDF_FILE = "./ESTADO DE CUENTA.pdf"
 CSV_FILE = "output.csv"
 
-COLUMNS = [
+# Columns for the CSV
+OUTPUT_COLUMNS = [
     "OPER", "LIQ", "COD.", "DESCRIPCION", "REFERENCIA",
-    "CARGOS", "BONOS", "OPERACION", "LIQUIDACION",
+    "CARGOS", "ABONOS", "OPERACION", "LIQUIDACION",
 ]
 
+# Max possible headers
+RANGE_HEADERS = ["OPER", "LIQ", "COD.", "DESCRIPCION", "REFERENCIA", "CARGOS", "ABONOS", "OPERACION", "LIQUIDACION"]
+# Always present on each cell
+ANCHOR_HEADERS = {"OPER", "LIQ", "COD.", "DESCRIPCION"}
+
 REF_PATTERN = re.compile(r"^ref\.?$", re.IGNORECASE)
+DATE_PATTERN = re.compile(r"^\d{2}/[A-Z]{3}$", re.IGNORECASE)
+ROW_Y_TOLERANCE = 3
+HEADER_ROW_TOLERANCE = 2
+FOOTER_MARKERS = {"Estimado", "Total", "INSTITUCION"}
 
-ROW_Y_TOLERANCE = 3   # px tolerance to consider two words on the same row
-FOOTER_MARKER = "Estimado"  # word that marks the end of the table on a page
-
-
-# ------------------------------------------------------------------ #
-# Header detection (per page, since headers repeat on every page)
-# ------------------------------------------------------------------ #
 def extract_words(page):
     return page.extract_words(
         x_tolerance=1, y_tolerance=1,
         keep_blank_chars=False, use_text_flow=False,
     )
 
-
-def find_headers(words):
-    headers = {name: None for name in COLUMNS}
+def find_header_row(words):
+    """
+    Locate the header row with Anocher Headers(OPER+LIQ+COD.+DESCRIPCION.
+    """
+    all_names = RANGE_HEADERS
+    candidates = defaultdict(list)
     for w in words:
-        text = w["text"].upper().rstrip(":")
-        if text in headers and headers[text] is None:
-            headers[text] = w
-    return headers
+        t = w["text"].upper().rstrip(":")
+        if t in all_names:
+            candidates[t].append(w)
+
+    rows = defaultdict(dict)
+    for name, ws in candidates.items():
+        for w in ws:
+            top = w["top"]
+            bucket_key = None
+            for key in rows:
+                if abs(key - top) <= HEADER_ROW_TOLERANCE:
+                    bucket_key = key
+                    break
+            if bucket_key is None:
+                bucket_key = top
+            rows[bucket_key][name] = w
+
+    best_row, best_count = None, -1
+    for top, found in rows.items():
+        if ANCHOR_HEADERS.issubset(found.keys()) and len(found) > best_count:
+            best_count = len(found)
+            best_row = found
+
+    if best_row is None:
+        return {name: None for name in all_names}
+    return {name: best_row.get(name) for name in all_names}
 
 
 def build_column_ranges(headers):
+    """
+    Identify midpoint for the data which doesn't necessarily start at the same x-position as its header label."""
     found = sorted(
         ((k, v["x0"]) for k, v in headers.items() if v is not None),
         key=lambda item: item[1],
     )
     ranges = []
-    for i, (name, left) in enumerate(found):
-        right = found[i + 1][1] if i < len(found) - 1 else float("inf")
+    for i, (name, x0) in enumerate(found):
+        left = float("-inf") if i == 0 else (found[i - 1][1] + x0) / 2
+        right = float("inf") if i == len(found) - 1 else (x0 + found[i + 1][1]) / 2
         ranges.append((name, left, right))
     return ranges
 
 
 def col_for_x(x, ranges):
     for name, left, right in ranges:
-        if left <= x < right:
+        if left < x <= right:
             return name
     return None
 
 
-# ------------------------------------------------------------------ #
-# Row grouping
-# ------------------------------------------------------------------ #
 def cluster_rows(words, y_tol=ROW_Y_TOLERANCE):
     rows = []
     for w in sorted(words, key=lambda w: (w["top"], w["x0"])):
@@ -90,93 +101,91 @@ def cluster_rows(words, y_tol=ROW_Y_TOLERANCE):
     return rows
 
 
-# ------------------------------------------------------------------ #
-# Per-page processing
-# ------------------------------------------------------------------ #
-def process_page(page):
+def get_canonical_ranges(pdf):
+    """
+    Use the page with the most complete header set to establish column boundaries, reused for every page even if later pages miss some header
+    """
+    best_headers, best_count = None, -1
+    for page in pdf.pages:
+        words = extract_words(page)
+        headers = find_header_row(words)
+        count = sum(1 for v in headers.values() if v is not None)
+        if count > best_count:
+            best_count = count
+            best_headers = headers
+    return build_column_ranges(best_headers)
+
+def process_page(page, canonical_ranges):
     words = extract_words(page)
-    headers = find_headers(words)
+    headers = find_header_row(words)
 
     if not any(headers.values()):
-        return []  # this page has no matching table (e.g. cover page)
+        return []  # No transactions table on this page
 
-    ranges = build_column_ranges(headers)
     header_bottom = max(h["bottom"] for h in headers.values() if h is not None)
 
     footer_top = float("inf")
     for w in words:
-        if w["text"] == FOOTER_MARKER:
-            footer_top = w["top"]
-            break
+        if w["top"] > header_bottom and w["text"] in FOOTER_MARKERS:
+            footer_top = min(footer_top, w["top"])
 
     body_words = [w for w in words if header_bottom < w["top"] < footer_top]
     rows = cluster_rows(body_words)
 
-    cargos_left = next((left for name, left, _ in ranges if name == "CARGOS"), float("inf"))
-
     records = []
     for row in rows:
         row_sorted = sorted(row, key=lambda w: w["x0"])
-        record = {c: [] for c in COLUMNS}
+        record = {c: [] for c in RANGE_HEADERS}
+        for w in row_sorted:
+            col = col_for_x(w["x0"], canonical_ranges)
+            if col:
+                record[col].append(w["text"])
 
-        ref_idx = None
-        for i, w in enumerate(row_sorted):
-            if REF_PATTERN.match(w["text"]):
-                ref_idx = i
-                break
+        line = {c: " ".join(record[c]).strip() for c in RANGE_HEADERS}
+        
+        # Wrapped continuation row  for DESCRIPCION and REFERENCIA (no OPER date) whose text starts with
+        # "Ref." is REFERENCIA; otherwise everything is DESCRIPCION.
+        zone_text = " ".join(filter(None, [line["DESCRIPCION"], line["REFERENCIA"]])).strip()
+        line["DESCRIPCION"] = zone_text
+        line["REFERENCIA"] = ""
 
-        if ref_idx is not None:
-            # words before "Ref." keep their normal column assignment
-            for w in row_sorted[:ref_idx]:
-                col = col_for_x(w["x0"], ranges)
-                if col:
-                    record[col].append(w["text"])
-            # from "Ref." onward: force into REFERENCIA unless it's past
-            # the start of the numeric columns (CARGOS/BONOS/etc.)
-            for w in row_sorted[ref_idx:]:
-                if w["x0"] >= cargos_left:
-                    col = col_for_x(w["x0"], ranges)
-                    if col:
-                        record[col].append(w["text"])
-                else:
-                    record["REFERENCIA"].append(w["text"])
-        else:
-            for w in row_sorted:
-                col = col_for_x(w["x0"], ranges)
-                if col:
-                    record[col].append(w["text"])
+        if not DATE_PATTERN.match(line["OPER"]) and zone_text:
+            zone_words = zone_text.split()
+            if zone_words and REF_PATTERN.match(zone_words[0]):
+                line["REFERENCIA"] = zone_text
+                line["DESCRIPCION"] = ""
 
-        line = {c: " ".join(record[c]).strip() for c in COLUMNS}
-        records.append(line)
+        records.append({c: line.get(c, "") for c in OUTPUT_COLUMNS})
 
     return records
 
 
 def is_continuation(line):
-    return not line["OPER"] and not line["LIQ"] and not line["COD."]
+    return not DATE_PATTERN.match(line["OPER"])
 
 
-# ------------------------------------------------------------------ #
-# Main
-# ------------------------------------------------------------------ #
 def main():
     all_records = []
-
     with pdfplumber.open(PDF_FILE) as pdf:
-        for page_number, page in enumerate(pdf.pages, start=1):
-            for line in process_page(page):
+        canonical_ranges = get_canonical_ranges(pdf)
+        for page in pdf.pages:
+            for line in process_page(page, canonical_ranges):
                 if not any(line.values()):
-                    continue  # skip fully blank rows
+                    continue
                 if is_continuation(line) and all_records:
                     prev = all_records[-1]
-                    for c in ("DESCRIPCION", "REFERENCIA"):
-                        if line[c]:
-                            prev[c] = (prev[c] + " " + line[c]).strip()
+                    extra_desc = " ".join(
+                        filter(None, [line["OPER"], line["LIQ"], line["COD."], line["DESCRIPCION"]])
+                    ).strip()
+                    if extra_desc:
+                        prev["DESCRIPCION"] = (prev["DESCRIPCION"] + " " + extra_desc).strip()
+                    if line["REFERENCIA"]:
+                        prev["REFERENCIA"] = (prev["REFERENCIA"] + " " + line["REFERENCIA"]).strip()
                 else:
                     all_records.append(line)
 
     with open(CSV_FILE, "w", newline="", encoding="utf-8-sig") as f:
-        writer = csv.DictWriter(f, fieldnames=COLUMNS)
+        writer = csv.DictWriter(f, fieldnames=OUTPUT_COLUMNS)
         writer.writeheader()
         writer.writerows(all_records)
 
